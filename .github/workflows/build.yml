@@ -1,0 +1,72 @@
+name: Build
+
+# PosterFox for Android = Mozilla's Fenix at the release tag in UPSTREAM, with the patches in patches/ applied.
+# The engine (GeckoView) is NOT compiled: Mozilla's artifact mode downloads the compiled half that CI already built for
+# that revision, so a free runner only builds the Kotlin/Java app with Gradle.
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Make room (the runner ships ~30 GB of SDKs we do not use)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+
+      - name: Firefox source at the release tag
+        run: |
+          tag=$(cat UPSTREAM)
+          git init -q firefox && cd firefox
+          git remote add origin https://github.com/mozilla-firefox/firefox
+          git fetch -q --depth 1 origin "refs/tags/$tag:refs/tags/$tag"
+          git checkout -q "$tag"
+          du -sh .
+
+      - name: Apply PosterFox patches
+        working-directory: firefox
+        run: |
+          shopt -s nullglob
+          for p in ../patches/*.patch; do echo "applying $p"; git apply --verbose "$p"; done
+
+      - name: mozconfig (Android, artifact mode)
+        working-directory: firefox
+        run: |
+          cat > mozconfig <<'EOF'
+          ac_add_options --enable-project=mobile/android
+          ac_add_options --target=aarch64-linux-android
+          ac_add_options --enable-artifact-builds
+          mk_add_options MOZ_OBJDIR=./objdir-android
+          EOF
+
+      - name: Bootstrap
+        working-directory: firefox
+        env:
+          MOZBUILD_STATE_PATH: ${{ runner.temp }}/mozbuild
+        run: ./mach --no-interactive bootstrap --application-choice "GeckoView/Firefox for Android Artifact Mode"
+
+      - name: Build GeckoView (artifacts) and Fenix
+        working-directory: firefox
+        env:
+          MOZBUILD_STATE_PATH: ${{ runner.temp }}/mozbuild
+        run: |
+          ./mach build
+          ./mach gradle fenix:assembleRelease
+          find objdir-android/gradle/build/mobile/android/fenix/app/outputs/apk -name '*.apk' -exec ls -la {} \;
+          df -h /
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: posterfox-android-unsigned
+          path: firefox/objdir-android/gradle/build/mobile/android/fenix/app/outputs/apk/**/*.apk
+          if-no-files-found: error

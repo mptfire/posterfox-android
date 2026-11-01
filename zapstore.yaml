@@ -32,4 +32,4 @@ tags:
   - nostr
   - posterchan
 
-icon: ./branding/posterfox-1024.png
+icon: ./branding/posterfox-512.png   # Zapstore refuses images over 500 KB (the 1024 px one is 601 KB)

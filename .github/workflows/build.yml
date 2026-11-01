@@ -154,11 +154,12 @@ jobs:
           (cd /tmp/zsp-src && go build -trimpath -o /tmp/zsp .)
           printf '%s' "$PF_KEYSTORE_BASE64" | base64 --decode > /tmp/release.p12
           # The certificate proof (NIP-C1, kind 30509) ties the APK's key to this npub; `publish -q` skips it, so it is
-          # signed offline and published here.
+          # signed offline here -- and published AFTER the release: for a NEW app relay.zapstore.dev refuses a proof it
+          # has no APK to check against ("send the proof with its first release"), and holds the release until a proof
+          # arrives. (The first attempt sent the proof first and both were refused.)
           KEYSTORE_PASSWORD="$PF_KEY_PASSWORD" /tmp/zsp identity --link-key /tmp/release.p12 --offline > /tmp/cert.json 2>/tmp/cert.err || true
           rm -f /tmp/release.p12
           pip install -q websockets
-          python3 tools/publish_cert_proof.py /tmp/cert.json /tmp/cert.err
           npub=$(sed -n 's/^pubkey: *//p' zapstore.yaml | head -1)
           # Zapstore no longer lists a release at once: it STORES the APK asset, then verifies and promotes the release
           # within minutes. So success here is the asset stored (read back from relay.zapstore.dev); promotion is checked
@@ -169,6 +170,7 @@ jobs:
                && ! grep -Fq 'software_asset -> wss://relay.zapstore.dev: FAILED' /tmp/zsp.log \
                && python3 tools/zapstore_verify.py "$npub" "$VER" --wait 300; then
               echo "Zapstore stored PosterFox $VER"
+              python3 tools/publish_cert_proof.py /tmp/cert.json /tmp/cert.err
               if python3 tools/zapstore_verify.py "$npub" "$VER" --release place.poster.posterfox --wait 300; then
                 echo "Zapstore lists PosterFox $VER"
               else

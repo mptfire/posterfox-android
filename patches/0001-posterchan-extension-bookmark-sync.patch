@@ -1,5 +1,5 @@
 diff --git a/mobile/android/fenix/app/src/main/java/org/mozilla/fenix/components/Core.kt b/mobile/android/fenix/app/src/main/java/org/mozilla/fenix/components/Core.kt
-index 37f1465b..5fc1f671 100644
+index 37f1465b..1002a979 100644
 --- a/mobile/android/fenix/app/src/main/java/org/mozilla/fenix/components/Core.kt
 +++ b/mobile/android/fenix/app/src/main/java/org/mozilla/fenix/components/Core.kt
 @@ -265,6 +265,8 @@ class Core(
@@ -7,22 +7,23 @@ index 37f1465b..5fc1f671 100644
              .also {
                  WebCompatFeature.install(it)
 +                // PosterFox: the PosterChan extension, built in, with bookmark sync served from this storage.
-+                org.mozilla.fenix.posterfox.PosterChanBookmarks.install(it) { bookmarksStorage }
++                org.mozilla.fenix.posterfox.PosterChanBookmarks.install(context, it) { bookmarksStorage }
              }
      }
  
 diff --git a/mobile/android/fenix/app/src/main/java/org/mozilla/fenix/posterfox/PosterChanBookmarks.kt b/mobile/android/fenix/app/src/main/java/org/mozilla/fenix/posterfox/PosterChanBookmarks.kt
 new file mode 100644
-index 00000000..f02965df
+index 00000000..46fa7a8f
 --- /dev/null
 +++ b/mobile/android/fenix/app/src/main/java/org/mozilla/fenix/posterfox/PosterChanBookmarks.kt
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,147 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 +
 +package org.mozilla.fenix.posterfox
 +
++import android.content.Context
 +import kotlinx.coroutines.CoroutineScope
 +import kotlinx.coroutines.Dispatchers
 +import kotlinx.coroutines.SupervisorJob
@@ -52,6 +53,10 @@ index 00000000..f02965df
 + * addFolder{parentGuid, title, position?}, update{guid, parentGuid?, position?, title?, url?}, remove{guid}.
 + * A node is {guid, parentGuid, position, title, url, type: item|folder|separator, dateAdded, children?}.
 + * A failure is ANSWERED as one: the extension must be able to tell "could not ask" from "there is nothing".
++ *
++ * It also installs uBlock Origin and Privacy Badger on first run, as ORDINARY add-ons from addons.mozilla.org rather
++ * than built in, so they keep receiving their updates from AMO. Each is recorded only once it installed, so a phone
++ * that was offline on its first run tries again on the next.
 + */
 +object PosterChanBookmarks {
 +    const val EXTENSION_ID = "passwords@poster.place"
@@ -62,10 +67,24 @@ index 00000000..f02965df
 +    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 +    private val controller = BuiltInWebExtensionController(EXTENSION_ID, EXTENSION_URL, NATIVE_APP)
 +
-+    /** Installs the built-in extension and connects its bookmark calls to [storage]. */
-+    fun install(engine: Engine, storage: () -> BookmarksStorage) {
++    private val ADDONS = mapOf(
++        "ublock-origin" to "https://addons.mozilla.org/firefox/downloads/latest/ublock-origin/latest.xpi",
++        "privacy-badger" to "https://addons.mozilla.org/firefox/downloads/latest/privacy-badger17/latest.xpi",
++    )
++
++    /** Installs the built-in extension, connects its bookmark calls to [storage], and offers the privacy add-ons. */
++    fun install(context: Context, engine: Engine, storage: () -> BookmarksStorage) {
 +        controller.registerBackgroundMessageHandler(Handler(storage), NATIVE_APP)
 +        controller.install(engine, onError = { logger.error("PosterChan extension did not install", it) })
++        val prefs = context.getSharedPreferences("posterfox", Context.MODE_PRIVATE)
++        for ((key, url) in ADDONS) {
++            if (prefs.getBoolean("addon_$key", false)) continue
++            engine.installWebExtension(
++                url,
++                onSuccess = { prefs.edit().putBoolean("addon_$key", true).apply() },
++                onError = { logger.warn("$key not installed yet; trying again next start", it) },
++            )
++        }
 +    }
 +
 +    private class Handler(private val storage: () -> BookmarksStorage) : MessageHandler {

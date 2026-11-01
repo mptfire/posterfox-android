@@ -92,7 +92,8 @@ jobs:
           # Release builds take their version NAME from -PversionName (without it: "159.0-default"). Firefox's version
           # plus this repository's build number, so every release -- and every Zapstore version -- is distinct.
           fx=$(sed -E 's/^FIREFOX_//; s/_RELEASE$//; s/_/./g' ../UPSTREAM)
-          ./mach gradle fenix:assembleRelease -PversionName="$fx-${{ github.run_number }}"
+          export PF_VERSION_NAME="$fx-${{ github.run_number }}"      # read by the gradle edit in tools/brand.py
+          ./mach gradle fenix:assembleRelease
           find objdir-android/gradle/build/mobile/android/fenix/app/outputs/apk -name '*.apk' -exec ls -la {} \;
 
       - name: Sign

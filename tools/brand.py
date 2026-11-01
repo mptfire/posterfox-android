@@ -65,6 +65,12 @@ def main(ff, icon):
          "            appContext.getPreferenceKey(R.string.pref_key_telemetry),\n            default = true,",
          "            appContext.getPreferenceKey(R.string.pref_key_telemetry),\n            default = false,")
 
+    # The release VERSION NAME. Mozilla's comes from a -PversionName that `./mach gradle` does not pass through, so a
+    # build said "159.0-default" -- the same name on every release, which Zapstore needs distinct. PF_VERSION_NAME (set by
+    # the workflow) wins; without it the build behaves exactly as Mozilla's.
+    edit(gradle, '"${Config.releaseVersionName(project)}"',
+         '(System.getenv("PF_VERSION_NAME") ?: "${Config.releaseVersionName(project)}")')
+
     edit(os.path.join(res, "values/static_strings.xml"),
          '<string name="app_name" translatable="false">Firefox</string>',
          f'<string name="app_name" translatable="false">{NAME}</string>')

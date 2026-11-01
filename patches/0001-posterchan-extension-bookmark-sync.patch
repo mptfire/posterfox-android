@@ -1,0 +1,147 @@
+diff --git a/mobile/android/fenix/app/src/main/java/org/mozilla/fenix/components/Core.kt b/mobile/android/fenix/app/src/main/java/org/mozilla/fenix/components/Core.kt
+index 37f1465b..5fc1f671 100644
+--- a/mobile/android/fenix/app/src/main/java/org/mozilla/fenix/components/Core.kt
++++ b/mobile/android/fenix/app/src/main/java/org/mozilla/fenix/components/Core.kt
+@@ -265,6 +265,8 @@ class Core(
+             )
+             .also {
+                 WebCompatFeature.install(it)
++                // PosterFox: the PosterChan extension, built in, with bookmark sync served from this storage.
++                org.mozilla.fenix.posterfox.PosterChanBookmarks.install(it) { bookmarksStorage }
+             }
+     }
+ 
+diff --git a/mobile/android/fenix/app/src/main/java/org/mozilla/fenix/posterfox/PosterChanBookmarks.kt b/mobile/android/fenix/app/src/main/java/org/mozilla/fenix/posterfox/PosterChanBookmarks.kt
+new file mode 100644
+index 00000000..f02965df
+--- /dev/null
++++ b/mobile/android/fenix/app/src/main/java/org/mozilla/fenix/posterfox/PosterChanBookmarks.kt
+@@ -0,0 +1,128 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++package org.mozilla.fenix.posterfox
++
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.SupervisorJob
++import kotlinx.coroutines.launch
++import mozilla.components.concept.engine.Engine
++import mozilla.components.concept.engine.webextension.MessageHandler
++import mozilla.components.concept.engine.webextension.Port
++import mozilla.components.concept.storage.BookmarkInfo
++import mozilla.components.concept.storage.BookmarkNode
++import mozilla.components.concept.storage.BookmarkNodeType
++import mozilla.components.concept.storage.BookmarksStorage
++import mozilla.components.support.base.log.logger.Logger
++import mozilla.components.support.webextensions.BuiltInWebExtensionController
++import org.json.JSONArray
++import org.json.JSONObject
++
++/**
++ * PosterFox: the PosterChan extension, built in, with bookmark sync.
++ *
++ * Firefox for Android implements no `bookmarks` WebExtension API, so the PosterChan extension's bookmark sync could not
++ * run here. This installs the extension as a BUILT-IN extension (assets/extensions/posterchan, the extension's
++ * `android` build) and answers its bookmark calls from this browser's own bookmark storage over native messaging. The
++ * extension side is bookmarks-native.js in the PosterChan repository; the sync rules stay in its bookmarks.js.
++ *
++ * The protocol, one port named [NATIVE_APP]: `{id, op, args}` in, `{id, ok, result}` or `{id, ok:false, error}` out.
++ * Ops: getTree{guid, recursive=true}, get{guid}, byUrl{url}, search{query}, addItem{parentGuid, url, title, position?},
++ * addFolder{parentGuid, title, position?}, update{guid, parentGuid?, position?, title?, url?}, remove{guid}.
++ * A node is {guid, parentGuid, position, title, url, type: item|folder|separator, dateAdded, children?}.
++ * A failure is ANSWERED as one: the extension must be able to tell "could not ask" from "there is nothing".
++ */
++object PosterChanBookmarks {
++    const val EXTENSION_ID = "passwords@poster.place"
++    const val EXTENSION_URL = "resource://android/assets/extensions/posterchan/"
++    const val NATIVE_APP = "posterfox_bookmarks"
++
++    private val logger = Logger("posterfox-bookmarks")
++    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
++    private val controller = BuiltInWebExtensionController(EXTENSION_ID, EXTENSION_URL, NATIVE_APP)
++
++    /** Installs the built-in extension and connects its bookmark calls to [storage]. */
++    fun install(engine: Engine, storage: () -> BookmarksStorage) {
++        controller.registerBackgroundMessageHandler(Handler(storage), NATIVE_APP)
++        controller.install(engine, onError = { logger.error("PosterChan extension did not install", it) })
++    }
++
++    private class Handler(private val storage: () -> BookmarksStorage) : MessageHandler {
++        override fun onPortMessage(message: Any, port: Port) {
++            val msg = message as? JSONObject ?: return
++            val id = msg.opt("id")
++            scope.launch {
++                val reply = JSONObject().put("id", id)
++                try {
++                    reply.put("ok", true).put("result", answer(msg.optString("op"), msg.optJSONObject("args") ?: JSONObject()))
++                } catch (e: Throwable) {
++                    reply.put("ok", false).put("error", e.message ?: e.javaClass.simpleName)
++                }
++                try { port.postMessage(reply) } catch (e: Throwable) { logger.warn("bookmark reply lost", e) }
++            }
++        }
++
++        private suspend fun answer(op: String, a: JSONObject): Any {
++            val s = storage()
++            return when (op) {
++                "getTree" -> s.getTree(a.getString("guid"), a.optBoolean("recursive", true)).getOrThrow()?.let(::json)
++                    ?: JSONObject.NULL
++                "get" -> s.getBookmark(a.getString("guid")).getOrThrow()?.let { json(it, children = false) } ?: JSONObject.NULL
++                "byUrl" -> JSONArray(s.getBookmarksWithUrl(a.getString("url")).getOrThrow().map { json(it, children = false) })
++                "search" -> JSONArray(s.searchBookmarks(a.optString("query"), SEARCH_LIMIT).getOrThrow()
++                    .map { json(it, children = false) })
++                "addItem" -> s.addItem(a.getString("parentGuid"), a.getString("url"), a.optString("title"), position(a))
++                    .getOrThrow()
++                "addFolder" -> s.addFolder(a.getString("parentGuid"), a.optString("title"), position(a)).getOrThrow()
++                "update" -> {
++                    val guid = a.getString("guid")
++                    val cur = s.getBookmark(guid).getOrThrow() ?: error("no such bookmark $guid")
++                    // A title or url left out means "unchanged", so they are filled from the node; a parent is sent only
++                    // for a MOVE -- an update that names no new parent must not move anything.
++                    val newParent = str(a, "parentGuid")?.takeIf { it != cur.parentGuid }
++                    s.updateNode(
++                        guid,
++                        BookmarkInfo(
++                            parentGuid = newParent,
++                            position = if (newParent != null) position(a) else null,
++                            title = str(a, "title") ?: cur.title,
++                            url = if (cur.type == BookmarkNodeType.ITEM) str(a, "url") ?: cur.url else null,
++                        ),
++                    ).getOrThrow()
++                    JSONObject.NULL
++                }
++                "remove" -> s.deleteNode(a.getString("guid")).getOrThrow()
++                else -> error("unknown op $op")
++            }
++        }
++    }
++
++    private const val SEARCH_LIMIT = 1000
++
++    private fun str(a: JSONObject, k: String): String? = if (a.has(k) && !a.isNull(k)) a.getString(k) else null
++
++    private fun position(a: JSONObject): UInt? =
++        if (a.has("position") && !a.isNull("position")) a.getInt("position").coerceAtLeast(0).toUInt() else null
++
++    private fun json(n: BookmarkNode, children: Boolean = true): JSONObject {
++        val o = JSONObject()
++            .put("guid", n.guid)
++            .put("parentGuid", n.parentGuid ?: JSONObject.NULL)
++            .put("position", n.position?.toLong() ?: JSONObject.NULL)
++            .put("title", n.title ?: "")
++            .put("url", n.url ?: JSONObject.NULL)
++            .put("dateAdded", n.dateAdded)
++            .put(
++                "type",
++                when (n.type) {
++                    BookmarkNodeType.FOLDER -> "folder"
++                    BookmarkNodeType.SEPARATOR -> "separator"
++                    BookmarkNodeType.ITEM -> "item"
++                },
++            )
++        if (children && n.children != null) o.put("children", JSONArray(n.children!!.map { json(it) }))
++        return o
++    }
++}

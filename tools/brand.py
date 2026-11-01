@@ -187,6 +187,21 @@ def main(ff, icon):
             o = (px - a.size[0]) // 2
             base.paste(a, (o, o), a)
             base.save(os.path.join(d, name + ".png"))
+    # The home screen's wordmark: "Firefox" and the fox were pictures (release/res/drawable-nodpi), so the app name
+    # alone left them in place. PosterFox's are rendered once into branding/ (no font on the runner is assumed); the
+    # normal text is black because the theme tints it, the private one white like Mozilla's.
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    nodpi = os.path.join(res, "drawable-nodpi")
+    text = Image.open(os.path.join(here, "branding/posterfox-wordmark.png")).convert("RGBA")
+    white = Image.new("RGBA", text.size, (255, 255, 255, 255))
+    white.putalpha(text.getchannel("A"))
+    for name, im in (("ic_wordmark_text_normal", text), ("ic_wordmark_text_private", white),
+                     ("ic_wordmark_logo", Image.open(os.path.join(here, "branding/posterfox-wordmark-logo.png")))):
+        webp = os.path.join(nodpi, name + ".webp")
+        if not os.path.isfile(webp):
+            sys.exit(f"brand.py: {webp} is gone -- the home wordmark moved")
+        os.remove(webp)
+        im.save(os.path.join(nodpi, name + ".png"))
     print("branded:", APP_ID + APP_SUFFIX, NAME)
 
 

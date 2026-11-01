@@ -1,21 +1,37 @@
 name: Build
 
-# PosterFox for Android = Mozilla's Fenix at the release tag in UPSTREAM, with the patches in patches/ applied.
-# The engine (GeckoView) is NOT compiled: Mozilla's artifact mode downloads the compiled half that CI already built for
-# that revision, so a free runner only builds the Kotlin/Java app with Gradle.
+# PosterFox for Android = Mozilla's Firefox for Android (Fenix) at the release tag in UPSTREAM, with patches/ applied,
+# tools/brand.py run, and the PosterChan extension (its `android` build, from the PosterChan repository at the commit in
+# PC_REF) built in. The engine (GeckoView) is NOT compiled: Mozilla's artifact mode downloads the compiled half its CI
+# already built for that revision, so a free runner only builds the app.
+#
+# Every push builds and signs. A RELEASE -- a `v*` tag, or "Run workflow" with publish ticked -- also publishes the APK
+# to GitHub Releases and Zapstore.
 
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish to GitHub Releases and Zapstore
+        type: boolean
+        default: false
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
+    env:
+      PUBLISH: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish == true }}
     steps:
       - uses: actions/checkout@v4
 
@@ -31,13 +47,25 @@ jobs:
           git remote add origin https://github.com/mozilla-firefox/firefox
           git fetch -q --depth 1 origin "refs/tags/$tag:refs/tags/$tag"
           git checkout -q "$tag"
-          du -sh .
 
-      - name: Apply PosterFox patches
-        working-directory: firefox
+      - name: PosterFox changes
         run: |
-          shopt -s nullglob
-          for p in ../patches/*.patch; do echo "applying $p"; git apply --verbose "$p"; done
+          for p in patches/*.patch; do echo "applying $p"; git -C firefox apply --verbose "../$p"; done
+          pip install -q pillow
+          python3 tools/brand.py firefox branding/posterfox-1024.png
+
+      - name: The PosterChan extension, built in
+        run: |
+          ref=$(cat PC_REF)
+          git init -q pc && cd pc
+          git remote add origin https://github.com/loblawbob873-svg/posterchanai
+          git sparse-checkout set --no-cone extension static/js/client/vaultcore.js static/vendor/nostr/nostr.bundle.js
+          git fetch -q --depth 1 origin "$ref" && git checkout -q FETCH_HEAD
+          test -f extension/bookmarks-native.js || { echo "::error::PC_REF $ref has no bookmarks-native.js"; exit 1; }
+          bash extension/build.sh >/dev/null
+          dest=../firefox/mobile/android/fenix/app/src/main/assets/extensions/posterchan
+          mkdir -p "$dest" && cp -r extension/dist/android/. "$dest/"
+          python3 -c "import json,sys; m=json.load(open('$dest/manifest.json')); assert 'nativeMessaging' in m['permissions'] and 'bookmarks-native.js' in m['background']['scripts']; print('extension', m['version'])"
 
       - name: mozconfig (Android, artifact mode)
         working-directory: firefox
@@ -55,7 +83,7 @@ jobs:
           MOZBUILD_STATE_PATH: ${{ runner.temp }}/mozbuild
         run: ./mach --no-interactive bootstrap --application-choice "GeckoView/Firefox for Android Artifact Mode"
 
-      - name: Build GeckoView (artifacts) and Fenix
+      - name: Build GeckoView (artifacts) and PosterFox
         working-directory: firefox
         env:
           MOZBUILD_STATE_PATH: ${{ runner.temp }}/mozbuild
@@ -63,10 +91,76 @@ jobs:
           ./mach build
           ./mach gradle fenix:assembleRelease
           find objdir-android/gradle/build/mobile/android/fenix/app/outputs/apk -name '*.apk' -exec ls -la {} \;
-          df -h /
+
+      - name: Sign
+        env:
+          PF_KEYSTORE_BASE64: ${{ secrets.PF_KEYSTORE_BASE64 }}
+          PF_KEY_PASSWORD: ${{ secrets.PF_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$PF_KEYSTORE_BASE64" || { echo '::error::PF_KEYSTORE_BASE64 is not set'; exit 1; }
+          printf '%s' "$PF_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.p12"
+          apk=$(find firefox/objdir-android/gradle/build/mobile/android/fenix/app/outputs/apk -name '*arm64*release*.apk' | head -1)
+          [ -n "$apk" ] || apk=$(find firefox/objdir-android/gradle/build/mobile/android/fenix/app/outputs/apk -name '*release*.apk' | head -1)
+          test -n "$apk" || { echo '::error::no release APK was built'; exit 1; }
+          sdk=$(find "${{ runner.temp }}/mozbuild" -maxdepth 2 -type d -name 'android-sdk-*' | head -1)
+          bt=$(ls -d "$sdk"/build-tools/* | sort -V | tail -1)
+          "$bt/zipalign" -f -p 4 "$apk" aligned.apk
+          "$bt/apksigner" sign --ks "$RUNNER_TEMP/release.p12" --ks-type PKCS12 --ks-key-alias posterfox \
+            --ks-pass env:PF_KEY_PASSWORD --key-pass env:PF_KEY_PASSWORD --out posterfox.apk aligned.apk
+          "$bt/apksigner" verify --print-certs posterfox.apk | tee signer.txt
+          grep -qi 'aa0abf106f3bbc61ba3030a65aa13533aa85819e987d7c82349ceca45927f9e5' signer.txt \
+            || { echo '::error::signed with an unexpected certificate'; exit 1; }
+          "$bt/aapt2" dump badging posterfox.apk | head -3 | tee badging.txt
+          grep -q "package: name='place.poster.posterfox'" badging.txt || { echo '::error::wrong application id'; exit 1; }
+          rm -f "$RUNNER_TEMP/release.p12"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: posterfox-android-unsigned
-          path: firefox/objdir-android/gradle/build/mobile/android/fenix/app/outputs/apk/**/*.apk
+          name: posterfox-android
+          path: posterfox.apk
           if-no-files-found: error
+
+      - name: Release on GitHub
+        if: env.PUBLISH == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ver=$(sed -n "s/.*versionName='\([^']*\)'.*/\1/p" badging.txt)
+          code=$(sed -n "s/.*versionCode='\([^']*\)'.*/\1/p" badging.txt)
+          tag="v$ver-$code"
+          echo "TAG=$tag" >> "$GITHUB_ENV"; echo "VER=$ver" >> "$GITHUB_ENV"
+          printf 'PosterFox %s for Android (Firefox %s, build %s).\n\nBookmark sync with PosterChan, no telemetry, uBlock Origin and Privacy Badger.\n' \
+            "$ver" "$(cat UPSTREAM)" "$code" > RELEASE_NOTES.md
+          gh release create "$tag" posterfox.apk --title "PosterFox for Android $ver ($code)" --notes-file RELEASE_NOTES.md
+
+      - name: Publish to Zapstore
+        if: env.PUBLISH == 'true'
+        env:
+          SIGN_WITH: ${{ secrets.ZAPSTORE_SIGN_WITH }}
+          PF_KEYSTORE_BASE64: ${{ secrets.PF_KEYSTORE_BASE64 }}
+          PF_KEY_PASSWORD: ${{ secrets.PF_KEY_PASSWORD }}
+          RELAY_URLS: wss://relay.poster.place,wss://relay.primal.net,wss://relay.zapstore.dev
+        run: |
+          set -o pipefail
+          test -n "$SIGN_WITH" || { echo '::error::ZAPSTORE_SIGN_WITH is not set'; exit 1; }
+          git clone -q --depth 1 --branch v0.4.11 https://github.com/zapstore/zsp.git /tmp/zsp-src
+          (cd /tmp/zsp-src && go build -trimpath -o /tmp/zsp .)
+          printf '%s' "$PF_KEYSTORE_BASE64" | base64 --decode > /tmp/release.p12
+          # The certificate proof (NIP-C1, kind 30509) ties the APK's key to this npub; `publish -q` skips it, so it is
+          # signed offline and published here.
+          KEYSTORE_PASSWORD="$PF_KEY_PASSWORD" /tmp/zsp identity --link-key /tmp/release.p12 --offline > /tmp/cert.json 2>/tmp/cert.err || true
+          rm -f /tmp/release.p12
+          pip install -q websockets
+          python3 tools/publish_cert_proof.py /tmp/cert.json /tmp/cert.err
+          npub=$(sed -n 's/^pubkey: *//p' zapstore.yaml | head -1)
+          for wait in 0 60 180 420; do
+            [ "$wait" = 0 ] || { echo "::warning::retrying the Zapstore publish in ${wait}s"; sleep "$wait"; }
+            if /tmp/zsp publish -q zapstore.yaml 2>&1 | tee /tmp/zsp.log \
+               && ! grep -Fq 'software_asset -> wss://relay.zapstore.dev: FAILED' /tmp/zsp.log \
+               && python3 tools/zapstore_verify.py "$npub" "$VER" --release place.poster.posterfox --wait 600; then
+              echo "published PosterFox $VER to Zapstore"; exit 0
+            fi
+          done
+          echo '::error::Zapstore did not store the release (GitHub has it)'; exit 1

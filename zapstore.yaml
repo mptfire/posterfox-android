@@ -1,0 +1,35 @@
+# Zapstore (https://zapstore.dev) listing for PosterFox for Android. Published by .github/workflows/build.yml on a
+# release run. `pubkey` must match the CI secret ZAPSTORE_SIGN_WITH (the PosterChan developer key), and Zapstore reads
+# this file from the repository to confirm the app belongs to it -- keep it committed.
+name: PosterFox
+pubkey: npub1fdtthaqujtjcd6yfy7kt0zpkadyl9vvypq00s5nztnmche74d0tqv6uwwr
+repository: https://github.com/loblawbob873-svg/posterfox-android
+website: https://poster.place
+license: MPL-2.0
+
+# The APK the workflow just built and signed (copied here before publishing).
+release_source: ./posterfox.apk
+release_notes: ./RELEASE_NOTES.md
+
+summary: PosterChan's Firefox for Android — your bookmarks synced with PosterChan, no telemetry
+description: |
+  **PosterFox** is the PosterChan-branded Firefox for Android: Mozilla's Firefox engine and app, with the PosterChan
+  extension built in.
+
+  - **Bookmark sync with PosterChan**: the same bookmarks as PosterFox on your desktop and the PosterChan add-on in
+    Firefox, Chrome, Edge and Brave — end-to-end encrypted with your vault key, stored on your own relay.
+  - **Passwords**: your PosterChan password vault, filled into websites.
+  - **No telemetry**: usage data and crash reporting are off from the first start.
+  - **uBlock Origin and Privacy Badger** installed on first start, kept up to date from addons.mozilla.org.
+
+  Built from Mozilla's Firefox release source with a small set of public changes, on GitHub Actions.
+
+tags:
+  - browser
+  - firefox
+  - privacy
+  - bookmarks
+  - nostr
+  - posterchan
+
+icon: ./branding/posterfox-1024.png

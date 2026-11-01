@@ -47,6 +47,10 @@ jobs:
           git remote add origin https://github.com/mozilla-firefox/firefox
           git fetch -q --depth 1 origin "refs/tags/$tag:refs/tags/$tag"
           git checkout -q "$tag"
+          # A tag is mutable; the commit is not. UPSTREAM_SHA pins the exact
+          # engine source this build is allowed to use -- a moved or hijacked
+          # tag fails the build instead of shipping a different engine.
+          test "$(git rev-parse HEAD)" = "$(cat ../UPSTREAM_SHA)" || { echo "::error::UPSTREAM $tag is $(git rev-parse HEAD), expected $(cat ../UPSTREAM_SHA)"; exit 1; }
 
       - name: PosterFox changes
         run: |

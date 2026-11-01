@@ -33,7 +33,7 @@ jobs:
     env:
       PUBLISH: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.publish == true }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Make room (the runner ships ~30 GB of SDKs we do not use)
         run: |

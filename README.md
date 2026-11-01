@@ -10,6 +10,6 @@ Planned, in this order:
 3. **Bookmark sync with PosterChan**, built into the app. Firefox for Android has no `bookmarks` WebExtension API, so
    the PosterChan extension cannot sync bookmarks there; the browser does it itself, sharing one set with desktop
    PosterFox and the extension.
-4. Signed releases on GitHub and Zapstore.
+4. Signed releases on GitHub and Zapstore (shipped: every push builds and signs with the PosterFox key; a `v*` tag or a publish-tick run also publishes to GitHub Releases and Zapstore).
 
 Not available on Android: per-tab containers and the AI sidebar.

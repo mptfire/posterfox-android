@@ -58,16 +58,26 @@ sleep 120
 pid=$($ADB shell pidof place.poster.posterfox | tr -d '\r')
 echo "PID ${pid:-none}"
 $ADB exec-out screencap -p > "$R/screen.png"
+# The surfaces the PosterFox changes touch, each a screenshot: the menu (PosterChan AI, no account row), Settings (no
+# "Sign in to sync"), the add-ons manager (uBlock Origin + Privacy Badger installed with no prompt).
+$ADB shell input keyevent KEYCODE_MENU; sleep 4; $ADB exec-out screencap -p > "$R/menu.png"
+$ADB shell input keyevent KEYCODE_BACK; sleep 2
+$ADB shell am start -a android.intent.action.VIEW -d fenix://settings place.poster.posterfox >/dev/null 2>&1; sleep 6
+$ADB exec-out screencap -p > "$R/settings.png"
+$ADB shell am start -a android.intent.action.VIEW -d fenix://settings_addon_manager place.poster.posterfox >/dev/null 2>&1; sleep 8
+$ADB exec-out screencap -p > "$R/addons.png"
 $ADB logcat -d > "$R/logcat.txt"
 grep -E "FATAL EXCEPTION|AndroidRuntime: (FATAL|Process: place.poster)" -A12 "$R/logcat.txt" | head -60 > "$R/crash.txt"
 echo "CRASH_LINES $(wc -l < "$R/crash.txt")"
 grep -iE "posterfox-bookmarks|passwords@poster.place|PosterChan extension|privacy-badger|ublock" "$R/logcat.txt" | head -20
-[ -n "$pid" ] && [ ! -s "$R/crash.txt" ]
+# The bookmark bridge must have ANSWERED a read from the app's own storage (the stand-in's baseline getTree).
+grep -q "bridge getTree ok" "$R/logcat.txt" && echo "BRIDGE_READ ok" || echo "BRIDGE_READ missing"
+[ -n "$pid" ] && [ ! -s "$R/crash.txt" ] && grep -q "bridge getTree ok" "$R/logcat.txt"
 REMOTE
 scp -q "$OUT/run.sh" "$NAS:android-sdk-emu/pf/run.sh" || exit 2
 ssh "$NAS" 'bash ~/android-sdk-emu/pf/run.sh </dev/null' > "$OUT/smoke.txt" 2>&1
 rc=$?
-scp -q "$NAS:android-sdk-emu/pf/results/logcat.txt" "$NAS:android-sdk-emu/pf/results/screen.png" "$NAS:android-sdk-emu/pf/results/crash.txt" "$OUT/" 2>/dev/null
+scp -q "$NAS:android-sdk-emu/pf/results/*.txt" "$NAS:android-sdk-emu/pf/results/*.png" "$OUT/" 2>/dev/null
 cat "$OUT/smoke.txt"; echo "results: $OUT"
 grep -q "EMULATOR_STOPPED" "$OUT/smoke.txt" || echo "WARNING: no EMULATOR_STOPPED line -- check nas for a leftover qemu"
 exit $(( rc == 0 ? 0 : (rc == 2 ? 2 : 1) ))

@@ -1,5 +1,5 @@
 diff --git a/mobile/android/fenix/app/src/main/java/org/mozilla/fenix/components/Core.kt b/mobile/android/fenix/app/src/main/java/org/mozilla/fenix/components/Core.kt
-index 37f1465b..1002a979 100644
+index 37f1465be7..1002a979d6 100644
 --- a/mobile/android/fenix/app/src/main/java/org/mozilla/fenix/components/Core.kt
 +++ b/mobile/android/fenix/app/src/main/java/org/mozilla/fenix/components/Core.kt
 @@ -265,6 +265,8 @@ class Core(
@@ -13,10 +13,10 @@ index 37f1465b..1002a979 100644
  
 diff --git a/mobile/android/fenix/app/src/main/java/org/mozilla/fenix/posterfox/PosterChanBookmarks.kt b/mobile/android/fenix/app/src/main/java/org/mozilla/fenix/posterfox/PosterChanBookmarks.kt
 new file mode 100644
-index 00000000..46fa7a8f
+index 0000000000..858ce51c5b
 --- /dev/null
 +++ b/mobile/android/fenix/app/src/main/java/org/mozilla/fenix/posterfox/PosterChanBookmarks.kt
-@@ -0,0 +1,147 @@
+@@ -0,0 +1,168 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -93,10 +93,16 @@ index 00000000..46fa7a8f
 +            val id = msg.opt("id")
 +            scope.launch {
 +                val reply = JSONObject().put("id", id)
++                val op = msg.optString("op")
 +                try {
-+                    reply.put("ok", true).put("result", answer(msg.optString("op"), msg.optJSONObject("args") ?: JSONObject()))
++                    val result = answer(op, msg.optJSONObject("args") ?: JSONObject())
++                    reply.put("ok", true).put("result", result)
++                    // What was answered and how big -- never a URL or a title (logcat is readable by the person's other
++                    // tools). tools/emulator_smoke.sh reads these lines.
++                    logger.info("bridge $op ok ${size(result)}")
 +                } catch (e: Throwable) {
 +                    reply.put("ok", false).put("error", e.message ?: e.javaClass.simpleName)
++                    logger.warn("bridge $op failed: ${e.javaClass.simpleName}")
 +                }
 +                try { port.postMessage(reply) } catch (e: Throwable) { logger.warn("bookmark reply lost", e) }
 +            }
@@ -139,6 +145,20 @@ index 00000000..46fa7a8f
 +
 +    private const val SEARCH_LIMIT = 1000
 +
++    private fun size(r: Any): String =
++        when (r) {
++            is JSONArray -> "${r.length()} items"
++            is JSONObject -> "${count(r)} nodes"
++            else -> r.toString().length.toString() + " chars"
++        }
++
++    private fun count(o: JSONObject): Int {
++        val kids = o.optJSONArray("children") ?: return 1
++        var n = 1
++        for (i in 0 until kids.length()) n += kids.optJSONObject(i)?.let(::count) ?: 0
++        return n
++    }
++
 +    private fun str(a: JSONObject, k: String): String? = if (a.has(k) && !a.isNull(k)) a.getString(k) else null
 +
 +    private fun position(a: JSONObject): UInt? =
@@ -160,7 +180,8 @@ index 00000000..46fa7a8f
 +                    BookmarkNodeType.ITEM -> "item"
 +                },
 +            )
-+        if (children && n.children != null) o.put("children", JSONArray(n.children!!.map { json(it) }))
++        val kids = n.children
++        if (children && kids != null) o.put("children", JSONArray(kids.map { json(it) }))
 +        return o
 +    }
 +}

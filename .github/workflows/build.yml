@@ -160,12 +160,22 @@ jobs:
           pip install -q websockets
           python3 tools/publish_cert_proof.py /tmp/cert.json /tmp/cert.err
           npub=$(sed -n 's/^pubkey: *//p' zapstore.yaml | head -1)
-          for wait in 0 60 180 420; do
+          # Zapstore no longer lists a release at once: it STORES the APK asset, then verifies and promotes the release
+          # within minutes. So success here is the asset stored (read back from relay.zapstore.dev); promotion is checked
+          # after, and only warned about if it has not happened yet -- the listing follows without another run.
+          for wait in 0 60 180; do
             [ "$wait" = 0 ] || { echo "::warning::retrying the Zapstore publish in ${wait}s"; sleep "$wait"; }
             if /tmp/zsp publish -q zapstore.yaml 2>&1 | tee /tmp/zsp.log \
                && ! grep -Fq 'software_asset -> wss://relay.zapstore.dev: FAILED' /tmp/zsp.log \
-               && python3 tools/zapstore_verify.py "$npub" "$VER" --release place.poster.posterfox --wait 600; then
-              echo "published PosterFox $VER to Zapstore"; exit 0
+               && python3 tools/zapstore_verify.py "$npub" "$VER" --wait 300; then
+              echo "Zapstore stored PosterFox $VER"
+              if python3 tools/zapstore_verify.py "$npub" "$VER" --release place.poster.posterfox --wait 300; then
+                echo "Zapstore lists PosterFox $VER"
+              else
+                echo "::warning title=Zapstore pending::stored, still being verified by Zapstore -- it lists the release when done"
+              fi
+              exit 0
             fi
           done
+          grep -iE "refus|reject|error|invalid" /tmp/zsp.log | tail -5
           echo '::error::Zapstore did not store the release (GitHub has it)'; exit 1

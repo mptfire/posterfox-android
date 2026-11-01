@@ -11,6 +11,9 @@ shipping an app that is half Firefox. Edits:
                  install an app whose sharedUserId belongs to an app signed with a different key -- so with Firefox on
                  the phone, PosterFox would not install at all.
   app name       "PosterFox" (the launcher label and the brand string).
+  telemetry      off: TELEMETRY and CRASH_REPORTING are false in the build config (as Mozilla's own debug build has
+                 them), and the "Send technical and interaction data" setting defaults to off. Mozilla's service tokens
+                 (Sentry, Adjust, Nimbus) are only added when token files exist, and a PosterFox build has none.
   icons          the ostrich: the adaptive icon's foreground becomes a bitmap of it on PosterChan purple, and the legacy
                  launcher icons are redrawn from it. The WebP files are deleted, not shadowed -- two resources with
                  one name in one folder is a build error.
@@ -55,6 +58,12 @@ def main(ff, icon):
             sys.exit(f"brand.py: release block lost {old!r}")
         block = block.replace(old, new)
     open(gradle, "w", encoding="utf-8").write(s[:m.start()] + block + s[m.end():])
+
+    edit(gradle, "    buildConfigField 'boolean', 'CRASH_REPORTING', 'true'\n    buildConfigField 'boolean', 'TELEMETRY', 'true'\n",
+         "    buildConfigField 'boolean', 'CRASH_REPORTING', 'false'\n    buildConfigField 'boolean', 'TELEMETRY', 'false'\n")
+    edit(os.path.join(app, "src/main/java/org/mozilla/fenix/utils/Settings.kt"),
+         "            appContext.getPreferenceKey(R.string.pref_key_telemetry),\n            default = true,",
+         "            appContext.getPreferenceKey(R.string.pref_key_telemetry),\n            default = false,")
 
     edit(os.path.join(res, "values/static_strings.xml"),
          '<string name="app_name" translatable="false">Firefox</string>',

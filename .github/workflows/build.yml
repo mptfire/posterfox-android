@@ -53,6 +53,7 @@ jobs:
           for p in patches/*.patch; do echo "applying $p"; git -C firefox apply --verbose "../$p"; done
           pip install -q pillow
           python3 tools/brand.py firefox branding/posterfox-1024.png
+          python3 tools/defaults.py firefox
 
       - name: The PosterChan extension, built in
         run: |

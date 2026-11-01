@@ -14,6 +14,9 @@ shipping an app that is half Firefox. Edits:
   telemetry      off: TELEMETRY and CRASH_REPORTING are false in the build config (as Mozilla's own debug build has
                  them), and the "Send technical and interaction data" setting defaults to off. Mozilla's service tokens
                  (Sentry, Adjust, Nimbus) are only added when token files exist, and a PosterFox build has none.
+  colours        desktop PosterFox's palette (distribution/posterfox-chrome.css) as Firefox's DARK scheme -- near-black
+                 surfaces, violet containers, neon cyan accents -- and dark is the first-run default. Private browsing
+                 keeps Firefox's own private palette, so the two modes still look different.
   icons          the ostrich: the adaptive icon's foreground becomes a bitmap of it on PosterChan purple, and the legacy
                  launcher icons are redrawn from it. The WebP files are deleted, not shadowed -- two resources with
                  one name in one folder is a build error.
@@ -70,6 +73,76 @@ def main(ff, icon):
     # the workflow) wins; without it the build behaves exactly as Mozilla's.
     edit(gradle, '"${Config.releaseVersionName(project)}"',
          '(System.getenv("PF_VERSION_NAME") ?: "${Config.releaseVersionName(project)}")')
+
+    # PosterChan's palette as the dark Material scheme (android-components compose-base, used by every Compose screen).
+    acorn = os.path.join(ff, "mobile/android/android-components/components/compose/base/src/main/java/mozilla/components/"
+                             "compose/base/theme/AcornColors.kt")
+    s = open(acorn, encoding="utf-8").read()
+    head = "fun acornDarkColorScheme(): ColorScheme =\n    darkColorScheme(\n"
+    i = s.find(head)
+    j = s.find("\n    )\n", i)
+    if i < 0 or j < 0 or s.count(head) != 1:
+        sys.exit("brand.py: acornDarkColorScheme moved -- update brand.py")
+    body = s[i + len(head):j]
+    for k in ("primary =", "background =", "surfaceContainerLowest ="):
+        if k not in body:
+            sys.exit(f"brand.py: acornDarkColorScheme lost {k!r}")
+    pc = {"bg": "0xFF0A0A0F", "panel": "0xFF12121C", "low": "0xFF0E0E16", "violet": "0xFF1C0F36", "tab": "0xFF26124A",
+          "line": "0xFF3A1F66", "border": "0xFF34345A", "neon": "0xFF3CE8FF", "hi": "0xFF257281", "green": "0xFF00FF88",
+          "text": "0xFFEDEEFA", "muted": "0xFF9FA1C6"}
+    C = lambda k: f"Color({pc[k]})"
+    new_body = f"""        // PosterFox: desktop PosterFox's palette (posterfox-chrome.css), tools/brand.py
+        primary = {C('neon')},
+        onPrimary = {C('bg')},
+        primaryContainer = {C('hi')},
+        onPrimaryContainer = {C('text')},
+        inversePrimary = {C('hi')},
+        secondary = {C('muted')},
+        onSecondary = {C('bg')},
+        secondaryContainer = {C('tab')},
+        onSecondaryContainer = {C('text')},
+        tertiary = {C('green')},
+        onTertiary = {C('bg')},
+        tertiaryContainer = {C('violet')},
+        onTertiaryContainer = {C('text')},
+        background = {C('bg')},
+        onBackground = {C('text')},
+        surface = {C('panel')},
+        onSurface = {C('text')},
+        surfaceVariant = {C('violet')},
+        onSurfaceVariant = {C('muted')},
+        surfaceTint = {C('line')},
+        inverseSurface = {C('text')},
+        inverseOnSurface = {C('bg')},
+        error = NovaColors.Red30,
+        onError = NovaColors.Gray80,
+        errorContainer = NovaColors.Red70,
+        onErrorContainer = NovaColors.VioletDesaturated0,
+        outline = {C('border')},
+        outlineVariant = {C('line')},
+        scrim = NovaColors.BlackA50,
+        surfaceBright = {C('tab')},
+        surfaceDim = {C('bg')},
+        surfaceContainer = {C('panel')},
+        surfaceContainerHigh = {C('violet')},
+        surfaceContainerHighest = {C('tab')},
+        surfaceContainerLow = {C('low')},
+        surfaceContainerLowest = {C('bg')},"""
+    s = s[:i + len(head)] + new_body + s[j:]
+    if "import androidx.compose.ui.graphics.Color\n" not in s:
+        sys.exit("brand.py: AcornColors.kt no longer imports Color")
+    open(acorn, "w", encoding="utf-8").write(s)
+
+    # Dark on first start (Firefox follows the system, which is light on most phones).
+    edit(os.path.join(app, "src/main/java/org/mozilla/fenix/FenixApplication.kt"), """                if (SDK_INT >= Build.VERSION_CODES.P) {
+                    AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
+                    settings.shouldFollowDeviceTheme = true
+                } else {
+                    AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
+                    settings.shouldUseLightTheme = true
+                }""", """                // PosterFox: dark (PosterChan's palette) on first start
+                AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
+                settings.shouldUseDarkTheme = true""")
 
     edit(os.path.join(res, "values/static_strings.xml"),
          '<string name="app_name" translatable="false">Firefox</string>',
